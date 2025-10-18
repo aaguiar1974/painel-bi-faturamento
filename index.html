@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Painel BI – Faturamento (Google Sheets • Live)</title>
+  <style>
+    :root { --gap: 20px; --card-radius: 16px; --shadow: 0 10px 24px rgba(0,0,0,.08); }
+    *{ box-sizing: border-box; }
+    body{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#0b1020; color:#e9ecf1; }
+    .wrap{ max-width:1200px; margin:0 auto; padding:32px 24px; }
+    header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:var(--gap); }
+    h1{ font-size: clamp(22px, 2.2vw, 28px); margin:0; letter-spacing:.2px; }
+    .cfg{ display:flex; gap:10px; flex-wrap:wrap; opacity:.85; font-size:13px; }
+    .cfg .chip{ display:inline-block; padding:4px 10px; border-radius:999px; background:#122048; border:1px solid rgba(255,255,255,.12); }
+
+    .grid{ display:grid; gap:var(--gap); grid-template-columns: 1fr; }
+    @media (min-width: 960px){ .grid{ grid-template-columns: 1.2fr .8fr; } }
+
+    .cards{ display:grid; gap:var(--gap); grid-template-columns: 1fr; }
+    @media (min-width: 720px){ .cards{ grid-template-columns: repeat(3, 1fr); } }
+
+    .card{ background: linear-gradient(180deg,#121a33,#0f1630 60%); border:1px solid rgba(255,255,255,.06); border-radius:var(--card-radius); padding:18px; box-shadow:var(--shadow); }
+    .kpi-label{ font-size:12px; text-transform:uppercase; letter-spacing:.8px; opacity:.7; margin-bottom:8px; }
+    .kpi-value{ font-size: clamp(22px, 3vw, 32px); font-weight:700; }
+
+    .panel{ background: #0f1630; border:1px solid rgba(255,255,255,.06); border-radius:var(--card-radius); padding:18px; box-shadow:var(--shadow); }
+    .panel h2{ margin:0 0 12px; font-size:18px; font-weight:700; }
+
+    .footer{ margin-top:28px; font-size:12px; opacity:.7; }
+    a { color:#9dd6ff; }
+    .note{ font-size:12px; opacity:.85; }
+
+    .diag{ margin-top:20px; display:grid; gap:8px; }
+    .test{ display:flex; align-items:center; gap:8px; font-size:13px; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.08); background:#0e1838; }
+    .ok{ color:#7CFF92; }
+    .fail{ color:#FF8A8A; }
+    .spinner{ width:12px; height:12px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; animation: spin 1s linear infinite; }
+    @keyframes spin{ to{ transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>📊 Painel BI – Faturamento (Google Sheets em tempo real)</h1>
+      <div class="cfg">
+        <span class="chip">Moeda: <span id="chipCurrency">BRL</span></span>
+        <span class="chip">SheetID: <code id="chipSheet">—</code></span>
+        <span class="chip">GID: <code id="chipGid">—</code></span>
+      </div>
+    </header>
+
+    <section class="cards">
+      <div class="card"><div class="kpi-label">Faturamento total</div><div class="kpi-value" id="kpiTotal">–</div></div>
+      <div class="card"><div class="kpi-label">Ticket médio</div><div class="kpi-value" id="kpiTicket">–</div></div>
+      <div class="card"><div class="kpi-label">Serviços (únicos)</div><div class="kpi-value" id="kpiServicos">–</div></div>
+    </section>
+
+    <section class="grid" style="margin-top:20px;">
+      <div class="panel">
+        <h2 id="mensalTitle">📈 Top clientes por faturamento</h2>
+        <div id="chartMensal" style="height: 360px;"></div>
+      </div>
+      <div class="panel">
+        <h2>🧩 Distribuição por serviço</h2>
+        <div id="chartServicos" style="height: 360px;"></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>🗂️ Tabela (dados da planilha)</h2>
+      <div class="note">As alterações na planilha são refletidas automaticamente aqui (desde que o acesso esteja público).</div>
+      <div id="tableRaw" style="margin-top:10px;"></div>
+    </section>
+
+    <section class="panel" style="margin-top:20px;">
+      <h2>🧪 Diagnóstico automático</h2>
+      <div class="note">Testes para ajudar no debug do ambiente e da planilha.</div>
+      <div class="diag" id="diag"></div>
+    </section>
+
+    <div class="footer">
+      <div><strong>Como conectar:</strong> compartilhe a planilha do Google como <em>“Qualquer pessoa com o link: Leitor”</em> ou publique-a na web. Este arquivo usa o ID e o GID da URL fornecida.</div>
+      <div style="margin-top:6px;" class="note">Estrutura esperada (cabeçalhos na primeira linha): <code>Cliente</code>, <code>Serviço</code>, <code>Vlr_Mens</code>. Campo de <em>Data</em> é opcional; se não existir, mostramos Top Clientes em vez de evolução mensal.</div>
+    </div>
+  </div>
+
+  <script>
+    // ===================== CONFIG =====================
+    const CONFIG = {
+      sheetId: "17k7gu0LP6GYAsqHho7HapFip_LC72EuLJ3KvKQY995Q", // ID extraído da sua URL
+      gid: "0",                                            // GID (aba)
+      columns: { client: "Cliente", service: "Serviço", amount: "Vlr_Mens", date: null },
+      currency: "BRL", // Ex: "BRL", "USD", "EUR"
+      locale: "pt-BR"
+    };
+    // ==================================================
+
+    // Atualiza chips de UI
+    document.getElementById("chipCurrency").textContent = CONFIG.currency;
+    document.getElementById("chipSheet").textContent = CONFIG.sheetId;
+    document.getElementById("chipGid").textContent = CONFIG.gid;
+
+    // Carregamento robusto do Google Charts
+    function injectGoogleCharts(){
+      return new Promise((resolve, reject) => {
+        if (window.google && window.google.charts){ return resolve(); }
+        const s = document.createElement('script');
+        s.src = 'https://www.gstatic.com/charts/loader.js';
+        s.async = true; s.defer = true;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Falha ao carregar https://www.gstatic.com/charts/loader.js (bloqueio de rede/CSP?).'));
+        document.head.appendChild(s);
+      });
+    }
+    function loadChartsPackages(){
+      return new Promise((resolve, reject) => {
+        if (!(window.google && google.charts)) return reject(new Error('Objeto google.charts indisponível.'));
+        try{
+          google.charts.load('current', { packages: ['corechart','table'], language: CONFIG.locale });
+          google.charts.setOnLoadCallback(() => resolve());
+        }catch(e){ reject(e); }
+      });
+    }
+
+    function buildGvizUrl(){
+      const base = `https://docs.google.com/spreadsheets/d/${CONFIG.sheetId}/gviz/tq`;
+      const params = new URLSearchParams({ gid: CONFIG.gid, tq: 'select *' });
+      return `${base}?${params.toString()}`;
+    }
+
+    function runQuery(){
+      return new Promise((resolve, reject) => {
+        try{
+          const url = buildGvizUrl();
+          const query = new google.visualization.Query(url);
+          query.send(resp => {
+            if (resp.isError()){
+              const msg = `${resp.getMessage()} — ${resp.getDetailedMessage()}`;
+              return reject(new Error(msg));
+            }
+            resolve(resp.getDataTable());
+          });
+        }catch(e){ reject(e); }
+      });
+    }
+
+    function indexColumns(dt, colNames){
+      const map = { date: -1, client: -1, service: -1, amount: -1 };
+      for (let c=0; c<dt.getNumberOfColumns(); c++){
+        const label = (dt.getColumnLabel(c) || '').trim().toLowerCase();
+        if (colNames.date && label === (colNames.date||'').toLowerCase()) map.date = c;
+        if (label === (colNames.client||'').toLowerCase()) map.client = c;
+        if (label === (colNames.service||'').toLowerCase()) map.service = c;
+        if (label === (colNames.amount||'').toLowerCase()) map.amount = c;
+      }
+      return map;
+    }
+
+    function coerceData(dt, idx){
+      // Novo schema flexível: Data é opcional; sempre mantemos Serviço, Cliente e Valor
+      const hasDate = idx.date !== -1;
+      const out = new google.visualization.DataTable();
+      if (hasDate) out.addColumn('date','Data');
+      out.addColumn('string','Serviço');
+      out.addColumn('string','Cliente');
+      out.addColumn('number','Faturamento');
+      for (let r=0; r<dt.getNumberOfRows(); r++){
+        let d = hasDate ? dt.getValue(r, idx.date) : null;
+        let s = dt.getValue(r, idx.service);
+        let c = idx.client !== -1 ? dt.getValue(r, idx.client) : '';
+        let v = dt.getValue(r, idx.amount);
+        if (hasDate && !(d instanceof Date)){
+          const raw = (d || '').toString().trim();
+          const maybe = parsePtBrDate(raw) || new Date(raw);
+          d = isFinite(maybe) ? maybe : null;
+        }
+        // normaliza monetário (aceita 1.234,56)
+        if (typeof v === 'string'){ v = v.replace(/\./g,'').replace(',','.'); }
+        v = Number(v) || 0;
+        s = (s || '').toString();
+        c = (c || '').toString();
+        if (hasDate){ if (d) out.addRow([d, s, c, v]); }
+        else{ out.addRow([s, c, v]); }
+      }
+      return { table: out, hasDate };
+    }
+
+    function parsePtBrDate(txt){
+      const m = txt.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if (!m) return null;
+      let [_, dd, mm, yy] = m;
+      dd = parseInt(dd,10); mm = parseInt(mm,10)-1; yy = parseInt(yy,10); if (yy<100) yy += 2000;
+      const d = new Date(yy, mm, dd);
+      return isNaN(d) ? null : d;
+    }
+
+    function currencyPrefix(code){
+      switch(code){
+        case 'BRL': return 'R$ ';
+        case 'USD': return '$';
+        case 'EUR': return '€ ';
+        default: return '';
+      }
+    }
+
+    function renderAll(model){
+      const dt = model.table; const hasDate = model.hasDate;
+      // Índices conforme schema flexível
+      let colIdx = { service: hasDate ? 1 : 0, client: hasDate ? 2 : 1, value: hasDate ? 3 : 2 };
+
+      // KPIs
+      const n = dt.getNumberOfRows();
+      let total = 0; const services = new Set();
+      for (let r=0; r<n; r++){ total += dt.getValue(r,colIdx.value) || 0; services.add(dt.getValue(r,colIdx.service)||''); }
+      const ticket = n ? (total / n) : 0;
+
+      const fmt = new google.visualization.NumberFormat({ prefix: currencyPrefix(CONFIG.currency), fractionDigits: 2, groupingSymbol: '.', decimalSymbol: ','});
+      document.getElementById('kpiTotal').textContent = fmt.formatValue(total);
+      document.getElementById('kpiTicket').textContent = fmt.formatValue(ticket);
+      document.getElementById('kpiServicos').textContent = services.size.toString();
+
+      const mensalTitle = document.getElementById('mensalTitle');
+      if (hasDate){ mensalTitle.textContent = '📈 Faturamento por mês'; drawMensal(dt, fmt, colIdx); }
+      else { mensalTitle.textContent = '📈 Top clientes por faturamento'; drawTopClientes(dt, fmt, colIdx); }
+      drawServicos(dt, fmt, colIdx);
+      drawTable(dt, colIdx);
+      window.addEventListener('resize', () => { if (hasDate) drawMensal(dt, fmt, colIdx); else drawTopClientes(dt, fmt, colIdx); drawServicos(dt, fmt, colIdx); });
+    }
+
+    function drawMensal(dt, fmt, colIdx){
+      const tmp = new google.visualization.DataTable();
+      tmp.addColumn('string','Mês');
+      tmp.addColumn('number','Faturamento');
+      const buckets = new Map();
+      for (let r=0; r<dt.getNumberOfRows(); r++){
+        const d = dt.getValue(r,0); // primeira coluna é Data quando hasDate=true
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        buckets.set(key, (buckets.get(key)||0) + (dt.getValue(r,colIdx.value)||0));
+      }
+      const keys = Array.from(buckets.keys()).sort();
+      keys.forEach(k => {
+        const [y,m] = k.split('-').map(Number);
+        const date = new Date(y, m-1, 1);
+        tmp.addRow([date.toLocaleDateString('pt-BR', { month:'short', year:'numeric' }).replace('.', ''), buckets.get(k)]);
+      });
+      const chart = new google.visualization.LineChart(document.getElementById('chartMensal'));
+      fmt.format(tmp, 1);
+      chart.draw(tmp, { legend: { position: 'none' }, backgroundColor: 'transparent', hAxis: { textStyle:{color:'#cdd6e5'} }, vAxis: { textStyle:{color:'#cdd6e5'}, gridlines:{ color:'rgba(255,255,255,.08)' } }, chartArea:{ left: 56, top: 20, right: 12, bottom: 36 }, lineWidth: 3, pointSize: 5 });
+    }
+
+    function drawTopClientes(dt, fmt, colIdx){
+      // Fallback quando não há coluna de Data: mostramos Top 10 clientes por faturamento
+      const tmp = new google.visualization.DataTable();
+      tmp.addColumn('string','Cliente');
+      tmp.addColumn('number','Faturamento');
+      const buckets = new Map();
+      for (let r=0; r<dt.getNumberOfRows(); r++){
+        const c = (dt.getValue(r,colIdx.client)||'').trim() || '—';
+        buckets.set(c, (buckets.get(c)||0) + (dt.getValue(r,colIdx.value)||0));
+      }
+      const rows = Array.from(buckets.entries()).sort((a,b)=> b[1]-a[1]).slice(0,10);
+      rows.forEach(([c,v])=> tmp.addRow([c,v]));
+      const chart = new google.visualization.ColumnChart(document.getElementById('chartMensal'));
+      fmt.format(tmp, 1);
+      chart.draw(tmp, { legend: { position: 'none' }, backgroundColor:'transparent', chartArea:{ left: 56, top: 20, right: 12, bottom: 60 }, hAxis:{ slantedText:true, slantedTextAngle:30, textStyle:{color:'#cdd6e5'} }, vAxis:{ textStyle:{color:'#cdd6e5'}, gridlines:{ color:'rgba(255,255,255,.08)' } } });
+    }
+
+    function drawServicos(dt, fmt, colIdx){
+      const tmp = new google.visualization.DataTable();
+      tmp.addColumn('string','Serviço');
+      tmp.addColumn('number','Faturamento');
+      const buckets = new Map();
+      for (let r=0; r<dt.getNumberOfRows(); r++){
+        const s = (dt.getValue(r,colIdx.service)||'').trim() || '—';
+        buckets.set(s, (buckets.get(s)||0) + (dt.getValue(r,colIdx.value)||0));
+      }
+      const rows = Array.from(buckets.entries()).sort((a,b)=> b[1]-a[1]);
+      rows.forEach(([s,v])=> tmp.addRow([s,v]));
+      const chart = new google.visualization.PieChart(document.getElementById('chartServicos'));
+      fmt.format(tmp, 1);
+      chart.draw(tmp, { legend: { position: 'right', textStyle:{color:'#cdd6e5'} }, backgroundColor: 'transparent', chartArea:{ left: 12, top: 12, right: 12, bottom: 12 } });
+    }
+
+    function drawTable(dt, colIdx){
+      const formatted = new google.visualization.DataTable(dt.toJSON());
+      const tableFmt = new google.visualization.NumberFormat({ prefix: currencyPrefix(CONFIG.currency), fractionDigits: 2, groupingSymbol: '.', decimalSymbol: ',' });
+      const lastCol = formatted.getNumberOfColumns()-1;
+      tableFmt.format(formatted, lastCol);
+      const table = new google.visualization.Table(document.getElementById('tableRaw'));
+      table.draw(formatted, { showRowNumber: true, width:'100%', page:'enable', pageSize: 10, allowHtml:true, sort:'enable' });
+    }
+
+    // ===================== TESTES / DIAGNÓSTICO =====================
+    const diagEl = document.getElementById('diag');
+    function addTest(name){
+      const row = document.createElement('div'); row.className = 'test';
+      row.innerHTML = `<span class="spinner"></span><span>${name}</span>`;
+      diagEl.appendChild(row);
+      return {
+        pass(msg='OK'){ row.innerHTML = `✅ <span class="ok">${name}</span> <span class="note">${msg}</span>`; },
+        fail(msg='Falhou'){ row.innerHTML = `❌ <span class="fail">${name}</span> <span class="note">${msg}</span>`; }
+      };
+    }
+
+    async function main(){
+      const t1 = addTest('Carregamento do Google Charts');
+      try{ await injectGoogleCharts(); t1.pass('loader.js carregado'); }
+      catch(e){ t1.fail(e.message); return alert('Não foi possível carregar o Google Charts. Verifique bloqueadores de conteúdo, rede ou CSP.'); }
+
+      const t2 = addTest('Inicialização de pacotes (corechart, table)');
+      try{ await loadChartsPackages(); t2.pass('pacotes prontos'); }
+      catch(e){ t2.fail(e.message); return; }
+
+      const t3 = addTest('Consulta à planilha (GViz API)');
+      let original;
+      try{ original = await runQuery(); t3.pass(`${original.getNumberOfRows()} linha(s)`); }
+      catch(e){ t3.fail(e.message + '\nDica: garanta que a planilha esteja pública com "Qualquer pessoa com o link: Leitor".'); return; }
+
+      const t4 = addTest('Mapeamento de colunas');
+      const idx = indexColumns(original, CONFIG.columns);
+      if (idx.service === -1 || idx.amount === -1){
+        t4.fail(`Não encontrei cabeçalhos essenciais. Necessários: Serviço e Vlr_Mens.`);
+        alert('Ajuste os cabeçalhos ou o mapeamento em CONFIG.columns.');
+        return;
+      } else {
+        const required = ['Serviço','Vlr_Mens'];
+        const optional = [];
+        if (CONFIG.columns.client) optional.push('Cliente');
+        if (CONFIG.columns.date) optional.push(CONFIG.columns.date);
+        t4.pass(`OK essenciais: ${required.join(', ')} | Opcionais: ${optional.join(', ')}`);
+      }
+
+      const cleaned = coerceData(original, idx);
+      renderAll(cleaned);
+    }
+
+    // Inicia
+    main();
+  </script>
+</body>
+</html>
